@@ -1,0 +1,19 @@
+
+$(function() {
+    window.last_scroll_position = 0;
+    var to_top = $('<div class="to_top" style="position:fixed;top:0;left:0;width:0.9em;text-align:center;vertical-align:middle;font-size:16pt;"><a href="#header" class="agh">&uarr;</a></div>');
+    
+    $('body').append(to_top);
+    $(window).scroll(function() {
+        show_hide();
+    });
+
+    function show_hide() {
+        if ($(window).scrollTop()>400) {
+            to_top.show();
+        } else {
+            to_top.hide();
+        }
+    }
+    show_hide();
+});

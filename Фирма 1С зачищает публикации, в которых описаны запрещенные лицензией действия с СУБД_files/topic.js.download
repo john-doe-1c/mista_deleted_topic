@@ -1,0 +1,428 @@
+/**
+ * Скрипты топика
+ */
+
+var dt = new Date();
+var TimeOfLastShowNewMessages = dt.getTime();
+var CountOfAutorefresh = 0;
+var ShowNewMessagesTimer = null;
+var GetNewMessagesIsRunning = false;
+var SendNewMessagesIsRunnning = false;
+var old_message_text; //Хранит предыдущий текст
+var hidden_messages = new Array();
+var active = true;
+var ctrlpressed = false;
+
+function getAllUrlParams(url) {
+
+  var queryString = url ? url.split('?')[1] : window.location.search.slice(1);
+  var obj = {};
+
+  if (queryString) {
+    queryString = queryString.split('#')[0];
+    var arr = queryString.split('&');
+
+    for (var i = 0; i < arr.length; i++) {
+      var a = arr[i].split('=');
+
+      var paramName = a[0];
+      var paramValue = typeof(a[1]) === 'undefined' ? true : a[1];
+
+      paramName = paramName.toLowerCase();
+      if (typeof paramValue === 'string') paramValue = paramValue.toLowerCase();
+
+      if (paramName.match(/\[(\d+)?\]$/)) {
+
+        var key = paramName.replace(/\[(\d+)?\]/, '');
+        if (!obj[key]) obj[key] = [];
+
+        if (paramName.match(/\[\d+\]$/)) {
+          var index = /\[(\d+)\]/.exec(paramName)[1];
+          obj[key][index] = paramValue;
+        } else {
+          obj[key].push(paramValue);
+        }
+      } else {
+        if (!obj[paramName]) {
+          obj[paramName] = paramValue;
+        } else if (obj[paramName] && typeof obj[paramName] === 'string') {
+          obj[paramName] = [obj[paramName]];
+          obj[paramName].push(paramValue);
+        } else {
+          obj[paramName].push(paramValue);
+        }
+      }
+    }
+  }
+
+  return obj;
+}
+
+/**
+ * is_voting() - true, если ветка - голосование
+ */
+function is_voting() {
+  return ($('#voting').length > 0);
+}
+
+/** 
+ * current_user() - имя текущего пользователя
+ */
+function current_user() {
+  return $('#user_name').html().trim();
+}
+
+/**
+ * current_user_id() - id текущего пользователя
+ */
+function current_user_id() {
+  var m;
+  m = document.cookie.match(/entr_id=(\d+);/);
+  if (m) {
+    return m[1];
+  } else {
+    return 0;
+  }
+}
+
+function topic_id() {
+  if (!window._topic_id) {
+    if (t_id = $('#topic_id').val()) {
+      window._topic_id = t_id;
+    } else {
+      window._topic_id = getAllUrlParams().id;
+    }
+  }
+  return window._topic_id;
+}
+
+/**
+ * use_ajax() - true, если у пользователя используется ajax
+ */
+function use_ajax() { return true; } //document.cookie.search(/ajax_accepted=yes/) != -1 ? true : false; }
+
+/**
+ * use_autorefresh() - true, если у пользователя используется автообновление
+ */
+function use_autorefresh() { return document.cookie.search(/autorefresh=no/) != -1 ? false : true; }
+
+/**
+ * use_autoload() - true, если у пользователя используется автоподгрузка
+ */
+function use_autoload() { return document.cookie.search(/autoload=no/) != -1 ? false : true; }
+
+function str_replace(txt, cut_str, paste_str) {
+  return txt.split(cut_str).join(paste_str);
+}
+
+/**
+ * test_ajax() - проверка ajax у пользователя
+ */
+function test_ajax() {
+  if (!use_ajax()) {
+    if ($.support.ajax) {
+      document.cookie = "ajax_accepted=yes; expires=Mon, 01-Jan-2100 00:00:00 GMT";
+    }
+  }
+}
+
+var keydown_event = function keydown_event(e) {
+  if (e.ctrlKey) {
+    if (e.which == 0xA || e.which == 0xD) {
+      if (document.activeElement && document.activeElement.id == 'message_text') {
+        e.preventDefault();
+        _addMessage();
+      }
+      //$('#newmsg_form').submit();
+    } else if (e.which == 0x25 || e.which == 0x27) {
+      if (document.activeElement && document.activeElement.id == 'message_text') {
+        return true;
+      }
+      var $p = $('#go_' + (['back', '', 'next'][e.which - 0x25]));
+      if ($p.length) {
+        e.preventDefault();
+        var link = '?id=' + topic_id() + '&page=' + $p.data('page');
+        window.location.hash = '';
+        window.location.search = link;
+      }
+    }
+  }
+}
+
+function topicAutoRefresh() {
+  if (!GetNewMessagesIsRunning) {
+    ShowNewMessages(true);
+  }
+}
+
+/**
+ * AddMessage() - добавление сообщения в тему
+ * Вызывается при щелчке на кнопке.
+ */
+function _addMessage() {
+  SendNewMessagesIsRunnning = true;
+  $('#message_text').focus();
+
+  var to_send = {};
+  $.each($('#newmsg_form').serializeArray(), function(i, v) {
+    to_send[v.name] = v.value;
+  });
+  to_send['user_name'] = current_user();
+  if (old_message_text == to_send['message_text']) return;
+  old_message_text = to_send['message_text'];
+
+  //to_send['message_text'] = escape(to_send['message_text']);
+
+  $('#submit_message').attr('disabled', true);
+
+  //to_send_str = unescape($.param(to_send));
+
+  var old_contentType = $.ajaxSettings.contentType;
+  //$.ajaxSettings.contentType = 'application/octet-stream';
+
+  $.ajax({
+      url: 'ajax_newmessage.php',
+      data: to_send,
+      method: 'post',
+      dataType: 'json'
+    }).done(function(result) {
+      if (result.client_action == 1) {
+        $('#error_string').html(' ');
+        $('#message_text').val('');
+        if (is_voting()) {
+          $('#voting_clear').click();
+        }
+      } else if (result.client_action == 2) {
+        $('#error_string').html('<span class="error">' + result.error + '</span>');
+      }
+    })
+    .always(function() {
+      $.ajaxSettings.contentType = old_contentType;
+      SendNewMessagesIsRunnning = false;
+      $('#submit_message').attr('disabled', false);
+      ga('send', 'event', 'message', window.location.href, 'newmessage');
+      ShowNewMessages();
+    });
+}
+
+function ShowNewMessages(auto) {
+  var $tm = $('#table_messages');
+  if (!topic_is_too_old && !$('body').data('loading')) {
+    $('body').data('loading', true);
+    var mylast_n = $tm.find('tr[id^="message_"]:last').attr('id').replace('message_', '');
+    mylast_n = parseInt(mylast_n);
+    //if(mylast_n<last_n) {return false;}
+    last_n = Math.max(last_n, mylast_n);
+
+    $.ajax({
+      url: 'ajax_jq_getnewmessages.php',
+      data: {
+        topic_id: topic_id(),
+        last_n: last_n,
+        auto: (auto ? 1 : 0)
+      },
+      method: 'get',
+      dataType: 'html'
+    }).done(function(data) {
+      var $data = $($.trim(data));
+      if ($data.length > 0) {
+        if (!$data.is('.error')) {
+          //var last_id=$data.last().get(0).id;
+          last_n = last_n + $data.length;
+        }
+        $data.appendTo($tm)
+          .trigger('mista.load');
+        if (!active && document.title.substr(0, 3) != '(*)') {
+          document.title = '(*) ' + document.title;
+        }
+      }
+    }).fail(function(jqxhr, textStatus, exception) {
+      console.log(exception);
+    }).always(function() {
+      $('body').data('loading', false);
+      ga('send', 'event', 'message', window.location.href, 'getnew');
+    });
+    return false;
+  }
+}
+
+function addBookmark() {
+  if (!topic_is_too_old && !$('body').data('bookmarking')) {
+    $('body').data('bookmarking', true);
+    $('#bookmark').html('Подождите...').attr('disabled', true);
+    $.ajax({
+      url: 'ajax_addbookmark.php',
+      data: {
+        topic_id: topic_id()
+      },
+      method: 'post',
+      dataType: 'json'
+    }).done(function(data) {
+      if ('undefined' === typeof data.error) {}
+    }).always(function() {
+      $('#bookmark').html('Закладка').attr('disabled', false);
+      $('body').data('bookmarking', false);
+    });
+    return false;
+  }
+}
+
+function addSpoiler() {
+  var $t = $(this);
+  if ($t.text().split(/[\n\r]/).length > 25) {
+    $t.wrap('<div class="spoiler" />')
+      .before('<div class="spoiler-roll">+ Code</div>')
+      .hide();
+  }
+}
+
+function codeSpoiler() {
+  $('div.message-text pre').each(addSpoiler);
+  $('#table_messages')
+    .on('click', 'div.spoiler-roll', function(e) { $(this).next().toggle(); })
+    .on('mista.load', 'tr', function(e) { $('div.message-text pre', this).each(addSpoiler); });
+}
+
+function afterScroll() {
+  var $tm = $('#table_messages');
+  //var $w = $(window);
+  //    var delta=$tm.position().top+$tm.height()-$w.scrollTop()-$w.height();
+  //    if(delta<=40 && delta>-40){
+  if (!$('body').data('afterScroll')) {
+    $('body').data('afterScroll', true);
+    var mylast_n = $tm.find('tr[id^="message_"]:last').attr('id').replace('message_', '');
+    mylast_n = parseInt(mylast_n);
+    if (mylast_n < last_n) {
+      $.ajax({
+        url: 'ajax_jq_getnewmessages.php',
+        data: {
+          topic_id: topic_id(),
+          last_n: mylast_n,
+          auto: 1,
+          afterScroll: 1
+        },
+        method: 'get',
+        dataType: 'html'
+      }).done(function(data) {
+        var $data = $($.trim(data));
+        if ($data.length > 0) {
+          if (!$data.is('.error')) {
+            //var last_id=$data.last().get(0).id;
+            //last_n=mylast_n+$data.length;
+          }
+          $data
+            .appendTo($tm)
+            .trigger('mista.load');
+        }
+      }).fail(function(jqxhr, testStatus, exception) {
+        console.log(exception);
+      }).always(function() {
+        $('body').data('afterScroll', false)
+      });
+    }
+  }
+  return false;
+}
+
+
+$(function() {
+  test_ajax();
+
+  if (use_autorefresh()) {
+    /*
+            $(window)
+                .mousemove(MyKeyboardMouseEvents) 
+                .blur(function(e){active=false;})
+                .focus(function(e){active=true;});
+    */
+    $(document)
+      .on({
+        'focusin': function(e) {
+          active = true;
+          if (document.title.substr(0, 3) == '(*)') {
+            document.title = document.title.substr(4);
+          }
+          window.ShowNewMessagesTimer = setInterval('topicAutoRefresh()', 60000);
+          topicAutoRefresh();
+        },
+        'focusout': function(e) {
+          active = false;
+          clearInterval(window.ShowNewMessagesTimer);
+        }
+      });
+  }
+
+  /*    if(use_autoload()) {
+          $(window).scroll(function(){
+              afterScroll();
+          });    
+      }
+  */
+  $(document).on('keydown', keydown_event);
+
+  $('#newmsg_form').on('submit', function(e) {
+    e.preventDefault();
+    _addMessage();
+  });
+
+  $('#voting_clear').on('click', function(e) {
+    e.preventDefault();
+    $('#voting :radio').each(function() {
+      this.checked = false;
+    });
+  });
+
+  //    $('#table_messages').on('load', 'tr', function(){
+  //        $(this).hide().fadeIn();
+  //    });
+
+  // скрытые
+  //$('.message-hidden').hide();
+  $(document).on('click', '.show-hide-message', function(e) {
+    e.stopPropagation();
+    var $divmsg = $(this).closest('td').find('div.message-text');
+    $divmsg.toggle();
+    $(this).html($divmsg.is(':visible') ? '&#9660;' : '&#9658;');
+    return false;
+  });
+
+  if (!topic_is_too_old) {
+    $('#bookmark').on('click', function(e) {
+      e.preventDefault();
+      addBookmark();
+    }).show();
+  }
+  codeSpoiler();
+
+  $(document).on('click', 'div.message-info', function(e) {
+    e.preventDefault();
+    var nr = $.trim($(this).text().split('-')[0]);
+    nr = (nr.match(/^\d+$/) ? nr : 0);
+    var $mt = $('#message_text');
+    var mtv = $.trim($mt.val());
+    $mt.val((mtv ? mtv + ' ' : '') + '(' + nr + ') ').focus();
+  });
+  $('div.message-info').wrapInner('<button class="sendbutton" />');
+  $('div.message-text a').not('.interlink').not('[target]').attr('target', '_blank');
+  $('#table_messages').on('mista.load', 'tr', function() {
+    var $this = $(this);
+    $this.find('div.message-info')
+      .wrapInner('<button class="sendbutton" />');
+    $this.find('div.message-text a')
+      .not('.interlink')
+      .not('[target]')
+      .attr('target', '_blank');
+    $this.hide().fadeIn();
+  });
+
+  $('#refresh_button').on('click', function(e) {
+    e.preventDefault();
+    ShowNewMessages();
+  });
+
+  if (window.localStorage) {
+    var togglenav = document.getElementById('togglenav');
+    togglenav.checked = (window.localStorage.getItem('navbar_pinned') == '1');
+    togglenav.addEventListener('change', function(event) { window.localStorage.setItem('navbar_pinned', 0 + event.target.checked) });
+  }
+});
